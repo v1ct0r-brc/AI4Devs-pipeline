@@ -22,6 +22,9 @@ jobs:
 
       - name: Install & Build Backend
         working-directory: ./backend
+        env:
+          # prisma generate needs DATABASE_URL defined; no real DB connection required
+          DATABASE_URL: postgresql://user:pass@localhost:5432/db
         run: |
           npm ci
           npx prisma generate

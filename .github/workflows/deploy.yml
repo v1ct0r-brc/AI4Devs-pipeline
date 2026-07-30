@@ -1,6 +1,5 @@
 name: Deploy to EC2
 
-# Se ejecuta cada vez que hay un push a la rama main
 on:
   push:
     branches:
@@ -12,62 +11,87 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Paso 1: Conectarse por SSH a la EC2 y ejecutar los comandos de deploy
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_INSTANCE }}
           username: ${{ secrets.AWS_ACCESS_ID }}
           key: ${{ secrets.AWS_ACCESS_KEY }}
           port: 22
-          script_stop: true  # Detener el deploy si algún comando falla
+          script_stop: true
+          command_timeout: 20m
           script: |
-            # ---------------------------------------------------------
-            # 1. Navegar al directorio del proyecto en la EC2
-            #    ⚠️ AJUSTA ESTA RUTA según donde tengas clonado el repo
-            # ---------------------------------------------------------
-            cd /home/ec2-user/lti || exit 1
+            set -e
+            APP_DIR="/home/${{ secrets.AWS_ACCESS_ID }}/lti"
 
             # ---------------------------------------------------------
-            # 2. Descargar los últimos cambios del repositorio
+            # 1. Ir al proyecto (debe estar clonado previamente en la EC2)
             # ---------------------------------------------------------
-            echo "📥 Pulling latest changes..."
+            cd "$APP_DIR" || { echo "No existe $APP_DIR. Clona el repo primero."; exit 1; }
+
+            echo "Pulling latest changes..."
             git pull origin main
 
             # ---------------------------------------------------------
-            # 3. Backend: instalar dependencias, generar Prisma y build
+            # 2. Levantar PostgreSQL con Docker (faltaba esto)
             # ---------------------------------------------------------
-            echo "🔧 Installing backend dependencies..."
-            cd backend
-            npm install --production=false
+            echo "Starting PostgreSQL with Docker Compose..."
+            if [ ! -f .env ]; then
+              echo "Falta el archivo .env en la raiz del proyecto (DB_USER, DB_PASSWORD, DB_NAME, DB_PORT)."
+              exit 1
+            fi
+            docker compose up -d
 
-            echo "🗄️ Generating Prisma client..."
+            # Esperar a que Postgres acepte conexiones
+            echo "Waiting for PostgreSQL..."
+            for i in $(seq 1 30); do
+              if docker compose exec -T db pg_isready -U "$(grep DB_USER .env | cut -d= -f2)" > /dev/null 2>&1; then
+                echo "PostgreSQL is ready"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "PostgreSQL did not become ready in time"
+                exit 1
+              fi
+              sleep 2
+            done
+
+            # ---------------------------------------------------------
+            # 3. Backend: deps, Prisma, migraciones, build
+            # ---------------------------------------------------------
+            echo "Installing backend dependencies..."
+            cd backend
+            npm ci
+
+            echo "Generating Prisma client..."
             npx prisma generate
 
-            echo "🏗️ Building backend..."
+            echo "Applying database migrations..."
+            npx prisma migrate deploy
+
+            echo "Building backend..."
             npm run build
 
             # ---------------------------------------------------------
-            # 4. Frontend: instalar dependencias y build de producción
+            # 4. Frontend: deps y build
             # ---------------------------------------------------------
-            echo "🎨 Installing frontend dependencies..."
+            echo "Installing frontend dependencies..."
             cd ../frontend
-            npm install
+            npm ci
 
-            echo "🏗️ Building frontend..."
+            echo "Building frontend..."
             npm run build
 
             # ---------------------------------------------------------
-            # 5. Reiniciar la aplicación con PM2
+            # 5. Reiniciar backend con PM2
             # ---------------------------------------------------------
             cd ../backend
-            echo "🔄 Restarting backend with PM2..."
-            # Si el proceso ya existe, lo reinicia; si no, lo inicia
-            pm2 describe lti-backend > /dev/null 2>&1 \
-              && pm2 restart lti-backend \
-              || pm2 start dist/index.js --name lti-backend
-
-            # Guardar el estado de PM2 para que persista tras reinicios
+            echo "Restarting backend with PM2..."
+            if pm2 describe lti-backend > /dev/null 2>&1; then
+              pm2 restart lti-backend
+            else
+              pm2 start dist/index.js --name lti-backend
+            fi
             pm2 save
 
-            echo "✅ Deploy completado correctamente"
+            echo "Deploy completado correctamente"

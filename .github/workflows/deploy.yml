@@ -1,9 +1,8 @@
 name: Deploy to EC2
 
-on:
+"on":
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   deploy:
@@ -22,19 +21,15 @@ jobs:
           command_timeout: 20m
           script: |
             set -e
-            APP_DIR="/home/${{ secrets.AWS_ACCESS_ID }}/lti"
+            APP_DIR="$HOME/lti"
 
-            # ---------------------------------------------------------
             # 1. Ir al proyecto (debe estar clonado previamente en la EC2)
-            # ---------------------------------------------------------
             cd "$APP_DIR" || { echo "No existe $APP_DIR. Clona el repo primero."; exit 1; }
 
             echo "Pulling latest changes..."
             git pull origin main
 
-            # ---------------------------------------------------------
-            # 2. Levantar PostgreSQL con Docker (faltaba esto)
-            # ---------------------------------------------------------
+            # 2. Levantar PostgreSQL con Docker
             echo "Starting PostgreSQL with Docker Compose..."
             if [ ! -f .env ]; then
               echo "Falta el archivo .env en la raiz del proyecto (DB_USER, DB_PASSWORD, DB_NAME, DB_PORT)."
@@ -42,10 +37,9 @@ jobs:
             fi
             docker compose up -d
 
-            # Esperar a que Postgres acepte conexiones
             echo "Waiting for PostgreSQL..."
             for i in $(seq 1 30); do
-              if docker compose exec -T db pg_isready -U "$(grep DB_USER .env | cut -d= -f2)" > /dev/null 2>&1; then
+              if docker compose exec -T db pg_isready -U "$(grep '^DB_USER=' .env | cut -d= -f2 | tr -d '"')" > /dev/null 2>&1; then
                 echo "PostgreSQL is ready"
                 break
               fi
@@ -56,9 +50,7 @@ jobs:
               sleep 2
             done
 
-            # ---------------------------------------------------------
             # 3. Backend: deps, Prisma, migraciones, build
-            # ---------------------------------------------------------
             echo "Installing backend dependencies..."
             cd backend
             npm ci
@@ -72,9 +64,7 @@ jobs:
             echo "Building backend..."
             npm run build
 
-            # ---------------------------------------------------------
             # 4. Frontend: deps y build
-            # ---------------------------------------------------------
             echo "Installing frontend dependencies..."
             cd ../frontend
             npm ci
@@ -82,9 +72,7 @@ jobs:
             echo "Building frontend..."
             npm run build
 
-            # ---------------------------------------------------------
             # 5. Reiniciar backend con PM2
-            # ---------------------------------------------------------
             cd ../backend
             echo "Restarting backend with PM2..."
             if pm2 describe lti-backend > /dev/null 2>&1; then

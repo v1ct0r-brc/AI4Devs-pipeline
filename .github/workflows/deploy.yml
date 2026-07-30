@@ -1,85 +1,86 @@
-name: Deploy to EC2
+name: Deploy to AWS EC2
 
-"on":
+on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy application
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      # ── Validación: build en el runner antes de deployar ──
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Generate Prisma Client
+        working-directory: ./backend
+        run: npx prisma generate
+
+      - name: Build backend
+        working-directory: ./backend
+        run: npm run build
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+
+      # ── Deploy vía SSH a EC2 ──
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_INSTANCE }}
           username: ${{ secrets.AWS_ACCESS_ID }}
           key: ${{ secrets.AWS_ACCESS_KEY }}
-          port: 22
-          script_stop: true
-          command_timeout: 20m
           script: |
-            set -e
-            APP_DIR="$HOME/lti"
+            # Navegar al directorio del proyecto (ajusta la ruta si tu carpeta se llama distinto)
+            cd ~/lti || cd ~/$(basename ${{ github.repository }}) || cd ~/LTI
+            echo "Deploying en: $(pwd)"
 
-            # 1. Ir al proyecto (debe estar clonado previamente en la EC2)
-            cd "$APP_DIR" || { echo "No existe $APP_DIR. Clona el repo primero."; exit 1; }
+            # Actualizar código fuente
+            git fetch origin
+            git reset --hard origin/main
 
-            echo "Pulling latest changes..."
-            git pull origin main
-
-            # 2. Levantar PostgreSQL con Docker
-            echo "Starting PostgreSQL with Docker Compose..."
-            if [ ! -f .env ]; then
-              echo "Falta el archivo .env en la raiz del proyecto (DB_USER, DB_PASSWORD, DB_NAME, DB_PORT)."
-              exit 1
-            fi
-            docker compose up -d
-
-            echo "Waiting for PostgreSQL..."
-            for i in $(seq 1 30); do
-              if docker compose exec -T db pg_isready -U "$(grep '^DB_USER=' .env | cut -d= -f2 | tr -d '"')" > /dev/null 2>&1; then
-                echo "PostgreSQL is ready"
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "PostgreSQL did not become ready in time"
-                exit 1
-              fi
-              sleep 2
-            done
-
-            # 3. Backend: deps, Prisma, migraciones, build
-            echo "Installing backend dependencies..."
+            # ── Backend ──
             cd backend
             npm ci
-
-            echo "Generating Prisma client..."
             npx prisma generate
-
-            echo "Applying database migrations..."
             npx prisma migrate deploy
-
-            echo "Building backend..."
             npm run build
 
-            # 4. Frontend: deps y build
-            echo "Installing frontend dependencies..."
+            # ── Frontend ──
             cd ../frontend
             npm ci
-
-            echo "Building frontend..."
             npm run build
 
-            # 5. Reiniciar backend con PM2
+            # ── Reiniciar servicios con PM2 ──
             cd ../backend
-            echo "Restarting backend with PM2..."
-            if pm2 describe lti-backend > /dev/null 2>&1; then
-              pm2 restart lti-backend
-            else
-              pm2 start dist/index.js --name lti-backend
-            fi
+            pm2 delete lti-backend 2>/dev/null || true
+            pm2 start dist/index.js --name lti-backend
+
+            # Si sirves el frontend estático directamente con PM2, descomenta:
+            # cd ../frontend
+            # pm2 delete lti-frontend 2>/dev/null || true
+            # pm2 serve build 3000 --name lti-frontend --spa
+
             pm2 save
 
-            echo "Deploy completado correctamente"
+            echo "Deploy completado exitosamente"

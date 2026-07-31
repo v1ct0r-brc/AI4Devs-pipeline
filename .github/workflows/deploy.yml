@@ -22,12 +22,12 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
-      # -- debub secrets
-      - name: Debug secrets
-        run: |
-          echo "Host: [${{ secrets.EC2_INSTANCE }}]"
-          echo "User: [${{ secrets.AWS_ACCESS_ID }}]"
-          # NO imprimas la clave privada por seguridad
+      # -- debug secrets
+      # - name: Debug secrets
+      #   run: |
+      #     echo "Host: [${{ secrets.EC2_INSTANCE }}]"
+      #     echo "User: [${{ secrets.AWS_ACCESS_ID }}]"
+      #     # NO imprimas la clave privada por seguridad
       # ── Validación: build en el runner antes de deployar ──
       - name: Install backend dependencies
         working-directory: ./backend

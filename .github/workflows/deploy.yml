@@ -58,7 +58,7 @@ jobs:
           key: ${{ secrets.AWS_ACCESS_KEY }}
           script: |
             # Navegar al directorio del proyecto (ajusta la ruta si tu carpeta se llama distinto)
-            cd ~/lti || cd ~/$(basename ${{ github.repository }}) || cd ~/LTI
+            cd ~/lti/AI4Devs-pipeline
             echo "Deploying en: $(pwd)"
 
             # Actualizar código fuente
